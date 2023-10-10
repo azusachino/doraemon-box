@@ -1,4 +1,6 @@
-mod postgre;
+mod postgres;
 mod sqlite;
 
-pub trait Repository {}
+pub trait Repository {
+
+}

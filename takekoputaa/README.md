@@ -1,3 +1,3 @@
 # Takekoputaa
 
-Takekoputaa, takes you to whereever you want to go.
+Takekoputaa, takes you to wherever you want to go.

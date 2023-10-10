@@ -1,1 +1,2 @@
 workspace.members = ["dokodemo-door"]
+workspace.resolver = "1"
