@@ -1,0 +1,45 @@
+<mxfile host="65bd71144e">
+    <diagram id="J1d-YC0gJ8yfm6IleI9K" name="main">
+        <mxGraphModel dx="1076" dy="862" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-6" value="message" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="dR2gRF2xP2cELjsRLfUU-1" target="dR2gRF2xP2cELjsRLfUU-2">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-1" value="User" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+                    <mxGeometry x="44" y="351" width="30" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-4" value="" style="group" vertex="1" connectable="0" parent="1">
+                    <mxGeometry x="142" y="340" width="133" height="82" as="geometry"/>
+                </mxCell>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-3" value="takekoputaa" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="dR2gRF2xP2cELjsRLfUU-4">
+                    <mxGeometry x="65" y="44" width="68" height="38" as="geometry"/>
+                </mxCell>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-2" value="Telegram" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;align=left;verticalAlign=top;" vertex="1" parent="dR2gRF2xP2cELjsRLfUU-4">
+                    <mxGeometry width="133" height="82" as="geometry"/>
+                </mxCell>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-9" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="dR2gRF2xP2cELjsRLfUU-5" target="dR2gRF2xP2cELjsRLfUU-8">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-5" value="dokodemo-door" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;" vertex="1" parent="1">
+                    <mxGeometry x="458" y="351" width="120" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-7" value="command" style="edgeStyle=none;html=1;" edge="1" parent="1" source="dR2gRF2xP2cELjsRLfUU-2" target="dR2gRF2xP2cELjsRLfUU-5">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="dR2gRF2xP2cELjsRLfUU-8" value="" style="sketch=0;points=[[0,0,0],[0.25,0,0],[0.5,0,0],[0.75,0,0],[1,0,0],[0,1,0],[0.25,1,0],[0.5,1,0],[0.75,1,0],[1,1,0],[0,0.25,0],[0,0.5,0],[0,0.75,0],[1,0.25,0],[1,0.5,0],[1,0.75,0]];outlineConnect=0;fontColor=#232F3E;gradientColor=#4D72F3;gradientDirection=north;fillColor=#3334B9;strokeColor=#ffffff;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=12;fontStyle=0;aspect=fixed;shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.database;" vertex="1" parent="1">
+                    <mxGeometry x="840" y="342" width="78" height="78" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="xp6xR5P85bJjrFhPVFpk" name="dokodemo-door">
+        <mxGraphModel dx="1316" dy="862" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

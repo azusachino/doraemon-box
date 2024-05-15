@@ -1,6 +1,7 @@
 mod postgres;
 mod sqlite;
 
-pub trait Repository {
+use postgres::PostgresRepository;
+use sqlite::SqliteRepository;
 
-}
+pub trait Repository {}
