@@ -1,0 +1,34 @@
+[tools]
+rust = "stable"
+"npm:prettier" = "latest"
+"npm:markdownlint-cli2" = "latest"
+
+[tasks.fmt]
+description = "Format all files"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cargo fmt
+prettier --write "**/*.{md,json,yaml,yml}"
+"""
+
+[tasks.fmt-check]
+description = "Check formatting"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cargo fmt -- --check
+prettier --check "**/*.{md,json,yaml,yml}"
+"""
+
+[tasks.lint]
+description = "Lint source files"
+run = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+
+[tasks.test]
+description = "Run tests"
+run = "cargo test --workspace --all-features"
+
+[tasks.check]
+description = "Run all checks"
+depends = ["fmt-check", "lint", "test"]

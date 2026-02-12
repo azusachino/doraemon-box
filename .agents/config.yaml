@@ -1,0 +1,17 @@
+version: 0.0.1
+project:
+  language: rust
+  framework: axum
+  build_system: cargo
+quality:
+  format: true
+  lint: true
+  test: true
+tools:
+  task_runner: mise
+  formatter: rustfmt
+  linter: clippy
+conventions:
+  commit_style: conventional
+  naming: rust_standard
+  indent: 2-space-for-config
