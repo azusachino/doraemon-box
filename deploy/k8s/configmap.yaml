@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: doraemon-box-config
+  namespace: doraemon-box
+data:
+  BIND_ADDR: "0.0.0.0:3000"
+  RUST_LOG: "info,dokodemo_door=debug"

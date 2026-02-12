@@ -12,6 +12,8 @@ thiserror = "1"
 sqlx = { version = "0.7", features = [
     "runtime-tokio-rustls",
     "postgres",
+    "sqlite",
+    "migrate",
     "chrono",
     "uuid",
 ] }
