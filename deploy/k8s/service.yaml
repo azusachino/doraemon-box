@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: doraemon-box-api
+  namespace: doraemon-box
+spec:
+  selector:
+    app: doraemon-box-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP

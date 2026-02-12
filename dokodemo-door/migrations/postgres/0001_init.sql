@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS entries (
-  id UUID PRIMARY KEY,
+  id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   kind TEXT NOT NULL CHECK (
     kind IN (
@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS entries (
   notes TEXT NOT NULL DEFAULT '',
   url TEXT,
   source TEXT NOT NULL DEFAULT 'manual',
-  tags TEXT[] NOT NULL DEFAULT '{}',
+  tags_json TEXT NOT NULL DEFAULT '[]',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

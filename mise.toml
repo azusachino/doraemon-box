@@ -29,6 +29,10 @@ run = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
 description = "Run tests"
 run = "cargo test --workspace --all-features"
 
+[tasks.migrate]
+description = "Run DB migrations for current DATABASE_URL"
+run = "cargo run -p dokodemo-door -- --migrate-only"
+
 [tasks.check]
 description = "Run all checks"
 depends = ["fmt-check", "lint", "test"]
