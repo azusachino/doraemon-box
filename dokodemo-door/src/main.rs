@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode},
     middleware::{from_fn_with_state, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -19,17 +19,6 @@ use tower::ServiceBuilder;
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
-
-const ALLOWED_KINDS: &[&str] = &[
-    "book",
-    "manga",
-    "article",
-    "animation",
-    "movie",
-    "series",
-    "note",
-    "link",
-];
 
 const ALLOWED_STATUSES: &[&str] = &["planned", "in_progress", "completed", "dropped"];
 static POSTGRES_MIGRATOR: Migrator = sqlx::migrate!("migrations/postgres");
@@ -47,6 +36,8 @@ enum Database {
     Postgres(PgPool),
     Sqlite(SqlitePool),
 }
+
+// -- Entry types --
 
 #[derive(Debug, Serialize)]
 struct Entry {
@@ -97,6 +88,63 @@ impl EntryRow {
     }
 }
 
+// -- Category types --
+
+#[derive(Debug, Serialize)]
+struct Category {
+    id: String,
+    name: String,
+    description: String,
+    created_at: String,
+}
+
+#[derive(Debug, FromRow)]
+struct CategoryRow {
+    id: String,
+    name: String,
+    description: String,
+    created_at: String,
+}
+
+impl CategoryRow {
+    fn into_category(self) -> Category {
+        Category {
+            id: self.id,
+            name: self.name,
+            description: self.description,
+            created_at: self.created_at,
+        }
+    }
+}
+
+// -- Tag types --
+
+#[derive(Debug, Serialize)]
+struct Tag {
+    id: String,
+    name: String,
+    created_at: String,
+}
+
+#[derive(Debug, FromRow)]
+struct TagRow {
+    id: String,
+    name: String,
+    created_at: String,
+}
+
+impl TagRow {
+    fn into_tag(self) -> Tag {
+        Tag {
+            id: self.id,
+            name: self.name,
+            created_at: self.created_at,
+        }
+    }
+}
+
+// -- Request types --
+
 #[derive(Debug, Deserialize)]
 struct CreateEntryRequest {
     title: String,
@@ -124,6 +172,7 @@ struct ListEntriesQuery {
     kind: Option<String>,
     status: Option<String>,
     search: Option<String>,
+    tag: Option<String>,
     limit: Option<i64>,
     offset: Option<i64>,
 }
@@ -152,6 +201,25 @@ struct NewEntry {
 }
 
 #[derive(Debug, Deserialize)]
+struct CreateCategoryRequest {
+    name: String,
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateCategoryRequest {
+    name: Option<String>,
+    description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateTagRequest {
+    name: String,
+}
+
+// -- Telegram types --
+
+#[derive(Debug, Deserialize)]
 struct TelegramUpdate {
     message: Option<TelegramMessage>,
     edited_message: Option<TelegramMessage>,
@@ -169,6 +237,8 @@ struct TelegramChat {
     id: i64,
 }
 
+// -- Response types --
+
 #[derive(Debug, Serialize)]
 struct HealthResponse {
     status: &'static str,
@@ -185,6 +255,8 @@ struct AcceptedResponse {
 struct ErrorResponse {
     error: String,
 }
+
+// -- Error --
 
 #[derive(Debug, thiserror::Error)]
 enum ApiError {
@@ -225,6 +297,8 @@ impl IntoResponse for ApiError {
         (status, Json(ErrorResponse { error: message })).into_response()
     }
 }
+
+// -- Main --
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -288,12 +362,21 @@ fn api_routes(state: AppState) -> Router<AppState> {
             get(get_entry).patch(update_entry).delete(delete_entry),
         )
         .route("/quick-capture", post(quick_capture))
+        .route("/categories", post(create_category).get(list_categories))
+        .route(
+            "/categories/:id",
+            patch(update_category).delete(delete_category),
+        )
+        .route("/tags", post(create_tag).get(list_tags))
+        .route("/tags/:id", delete(delete_tag))
         .layer(from_fn_with_state(state, api_key_auth));
 
     Router::new()
         .merge(protected_routes)
         .route("/integrations/telegram/update", post(telegram_capture))
 }
+
+// -- Database setup --
 
 async fn connect_database(database_url: &str) -> Result<Database> {
     if database_url.starts_with("sqlite:") {
@@ -337,6 +420,8 @@ async fn run_migrations(db: &Database) -> Result<()> {
     Ok(())
 }
 
+// -- Auth middleware --
+
 async fn api_key_auth(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -362,6 +447,8 @@ async fn api_key_auth(
     }
 }
 
+// -- Health --
+
 async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     let database = match state.db {
         Database::Postgres(_) => "postgres",
@@ -374,15 +461,18 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     })
 }
 
+// -- Entry handlers --
+
 async fn create_entry(
     State(state): State<AppState>,
     Json(req): Json<CreateEntryRequest>,
 ) -> Result<(StatusCode, Json<Entry>), ApiError> {
-    validate_kind(&req.kind)?;
+    validate_kind(&state.db, &req.kind).await?;
 
     let status = req.status.unwrap_or_else(|| "planned".to_string());
     validate_status(&status)?;
 
+    let tags = req.tags.unwrap_or_default();
     let entry = insert_entry(
         &state.db,
         NewEntry {
@@ -393,8 +483,9 @@ async fn create_entry(
             notes: req.notes.unwrap_or_default(),
             url: req.url,
             source: req.source.unwrap_or_else(|| "manual".to_string()),
-            tags_json: serialize_tags(req.tags.unwrap_or_default())?,
+            tags_json: serialize_tags(tags.clone())?,
         },
+        &tags,
     )
     .await?;
 
@@ -406,7 +497,7 @@ async fn list_entries(
     Query(query): Query<ListEntriesQuery>,
 ) -> Result<Json<Vec<Entry>>, ApiError> {
     if let Some(kind) = &query.kind {
-        validate_kind(kind)?;
+        validate_kind(&state.db, kind).await?;
     }
     if let Some(status) = &query.status {
         validate_status(status)?;
@@ -420,31 +511,48 @@ async fn list_entries(
             sqlx::query_as::<_, EntryRow>(
                 r#"
                 SELECT
-                  id,
-                  title,
-                  kind,
-                  status,
-                  notes,
-                  url,
-                  source,
-                  tags_json,
-                  created_at::text AS created_at,
-                  updated_at::text AS updated_at
-                FROM entries
-                WHERE ($1::text IS NULL OR kind = $1)
-                  AND ($2::text IS NULL OR status = $2)
+                  e.id,
+                  e.title,
+                  e.kind,
+                  e.status,
+                  e.notes,
+                  e.url,
+                  e.source,
+                  COALESCE(
+                    (SELECT json_agg(sub.name)::text
+                     FROM (SELECT t.name
+                           FROM entry_tags et
+                           JOIN tags t ON t.id = et.tag_id
+                           WHERE et.entry_id = e.id
+                           ORDER BY t.name) sub),
+                    '[]'
+                  ) AS tags_json,
+                  e.created_at::text AS created_at,
+                  e.updated_at::text AS updated_at
+                FROM entries e
+                WHERE ($1::text IS NULL OR e.kind = $1)
+                  AND ($2::text IS NULL OR e.status = $2)
                   AND (
                     $3::text IS NULL
-                    OR LOWER(title) LIKE '%' || LOWER($3) || '%'
-                    OR LOWER(notes) LIKE '%' || LOWER($3) || '%'
+                    OR LOWER(e.title) LIKE '%' || LOWER($3) || '%'
+                    OR LOWER(e.notes) LIKE '%' || LOWER($3) || '%'
                   )
-                ORDER BY created_at DESC
-                LIMIT $4 OFFSET $5
+                  AND (
+                    $4::text IS NULL
+                    OR EXISTS (
+                      SELECT 1 FROM entry_tags et2
+                      JOIN tags t2 ON t2.id = et2.tag_id
+                      WHERE et2.entry_id = e.id AND t2.name = $4
+                    )
+                  )
+                ORDER BY e.created_at DESC
+                LIMIT $5 OFFSET $6
                 "#,
             )
-            .bind(query.kind)
-            .bind(query.status)
-            .bind(query.search)
+            .bind(&query.kind)
+            .bind(&query.status)
+            .bind(&query.search)
+            .bind(&query.tag)
             .bind(limit)
             .bind(offset)
             .fetch_all(pool)
@@ -454,31 +562,48 @@ async fn list_entries(
             sqlx::query_as::<_, EntryRow>(
                 r#"
                 SELECT
-                  id,
-                  title,
-                  kind,
-                  status,
-                  notes,
-                  url,
-                  source,
-                  tags_json,
-                  created_at,
-                  updated_at
-                FROM entries
-                WHERE (?1 IS NULL OR kind = ?1)
-                  AND (?2 IS NULL OR status = ?2)
+                  e.id,
+                  e.title,
+                  e.kind,
+                  e.status,
+                  e.notes,
+                  e.url,
+                  e.source,
+                  COALESCE(
+                    (SELECT json_group_array(sub.name)
+                     FROM (SELECT t.name
+                           FROM entry_tags et
+                           JOIN tags t ON t.id = et.tag_id
+                           WHERE et.entry_id = e.id
+                           ORDER BY t.name) sub),
+                    '[]'
+                  ) AS tags_json,
+                  e.created_at,
+                  e.updated_at
+                FROM entries e
+                WHERE (?1 IS NULL OR e.kind = ?1)
+                  AND (?2 IS NULL OR e.status = ?2)
                   AND (
                     ?3 IS NULL
-                    OR LOWER(title) LIKE '%' || LOWER(?3) || '%'
-                    OR LOWER(notes) LIKE '%' || LOWER(?3) || '%'
+                    OR LOWER(e.title) LIKE '%' || LOWER(?3) || '%'
+                    OR LOWER(e.notes) LIKE '%' || LOWER(?3) || '%'
                   )
-                ORDER BY created_at DESC
-                LIMIT ?4 OFFSET ?5
+                  AND (
+                    ?4 IS NULL
+                    OR EXISTS (
+                      SELECT 1 FROM entry_tags et2
+                      JOIN tags t2 ON t2.id = et2.tag_id
+                      WHERE et2.entry_id = e.id AND t2.name = ?4
+                    )
+                  )
+                ORDER BY e.created_at DESC
+                LIMIT ?5 OFFSET ?6
                 "#,
             )
-            .bind(query.kind)
-            .bind(query.status)
-            .bind(query.search)
+            .bind(&query.kind)
+            .bind(&query.status)
+            .bind(&query.search)
+            .bind(&query.tag)
             .bind(limit)
             .bind(offset)
             .fetch_all(pool)
@@ -498,55 +623,7 @@ async fn get_entry(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Entry>, ApiError> {
-    let row = match &state.db {
-        Database::Postgres(pool) => {
-            sqlx::query_as::<_, EntryRow>(
-                r#"
-                SELECT
-                  id,
-                  title,
-                  kind,
-                  status,
-                  notes,
-                  url,
-                  source,
-                  tags_json,
-                  created_at::text AS created_at,
-                  updated_at::text AS updated_at
-                FROM entries
-                WHERE id = $1
-                "#,
-            )
-            .bind(id)
-            .fetch_optional(pool)
-            .await?
-        }
-        Database::Sqlite(pool) => {
-            sqlx::query_as::<_, EntryRow>(
-                r#"
-                SELECT
-                  id,
-                  title,
-                  kind,
-                  status,
-                  notes,
-                  url,
-                  source,
-                  tags_json,
-                  created_at,
-                  updated_at
-                FROM entries
-                WHERE id = ?1
-                "#,
-            )
-            .bind(id)
-            .fetch_optional(pool)
-            .await?
-        }
-    }
-    .ok_or(ApiError::NotFound)?;
-
-    Ok(Json(row.into_entry()?))
+    Ok(Json(fetch_entry(&state.db, &id).await?))
 }
 
 async fn update_entry(
@@ -555,21 +632,20 @@ async fn update_entry(
     Json(req): Json<UpdateEntryRequest>,
 ) -> Result<Json<Entry>, ApiError> {
     if let Some(kind) = &req.kind {
-        validate_kind(kind)?;
+        validate_kind(&state.db, kind).await?;
     }
     if let Some(status) = &req.status {
         validate_status(status)?;
     }
 
-    let tags_json = match req.tags {
-        Some(tags) => Some(serialize_tags(tags)?),
+    let tags_json = match &req.tags {
+        Some(tags) => Some(serialize_tags(tags.clone())?),
         None => None,
     };
 
-    let row = match &state.db {
-        Database::Postgres(pool) => {
-            sqlx::query_as::<_, EntryRow>(
-                r#"
+    let rows_affected = match &state.db {
+        Database::Postgres(pool) => sqlx::query(
+            r#"
                 UPDATE entries
                 SET
                   title = COALESCE($2, title),
@@ -581,33 +657,21 @@ async fn update_entry(
                   tags_json = COALESCE($8, tags_json),
                   updated_at = NOW()
                 WHERE id = $1
-                RETURNING
-                  id,
-                  title,
-                  kind,
-                  status,
-                  notes,
-                  url,
-                  source,
-                  tags_json,
-                  created_at::text AS created_at,
-                  updated_at::text AS updated_at
                 "#,
-            )
-            .bind(id)
-            .bind(req.title)
-            .bind(req.kind)
-            .bind(req.status)
-            .bind(req.notes)
-            .bind(req.url)
-            .bind(req.source)
-            .bind(tags_json)
-            .fetch_optional(pool)
-            .await?
-        }
-        Database::Sqlite(pool) => {
-            sqlx::query_as::<_, EntryRow>(
-                r#"
+        )
+        .bind(&id)
+        .bind(&req.title)
+        .bind(&req.kind)
+        .bind(&req.status)
+        .bind(&req.notes)
+        .bind(&req.url)
+        .bind(&req.source)
+        .bind(&tags_json)
+        .execute(pool)
+        .await?
+        .rows_affected(),
+        Database::Sqlite(pool) => sqlx::query(
+            r#"
                 UPDATE entries
                 SET
                   title = COALESCE(?2, title),
@@ -619,24 +683,30 @@ async fn update_entry(
                   tags_json = COALESCE(?8, tags_json),
                   updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                 WHERE id = ?1
-                RETURNING id, title, kind, status, notes, url, source, tags_json, created_at, updated_at
                 "#,
-            )
-            .bind(id)
-            .bind(req.title)
-            .bind(req.kind)
-            .bind(req.status)
-            .bind(req.notes)
-            .bind(req.url)
-            .bind(req.source)
-            .bind(tags_json)
-            .fetch_optional(pool)
-            .await?
-        }
-    }
-    .ok_or(ApiError::NotFound)?;
+        )
+        .bind(&id)
+        .bind(&req.title)
+        .bind(&req.kind)
+        .bind(&req.status)
+        .bind(&req.notes)
+        .bind(&req.url)
+        .bind(&req.source)
+        .bind(&tags_json)
+        .execute(pool)
+        .await?
+        .rows_affected(),
+    };
 
-    Ok(Json(row.into_entry()?))
+    if rows_affected == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    if let Some(tags) = &req.tags {
+        sync_entry_tags(&state.db, &id, tags).await?;
+    }
+
+    Ok(Json(fetch_entry(&state.db, &id).await?))
 }
 
 async fn delete_entry(
@@ -668,13 +738,14 @@ async fn quick_capture(
     Json(req): Json<QuickCaptureRequest>,
 ) -> Result<(StatusCode, Json<Entry>), ApiError> {
     let kind = req.kind.unwrap_or_else(|| "note".to_string());
-    validate_kind(&kind)?;
+    validate_kind(&state.db, &kind).await?;
 
     let status = req.status.unwrap_or_else(|| "planned".to_string());
     validate_status(&status)?;
 
     let title = req.title.unwrap_or_else(|| summarize_title(&req.text));
     let url = req.url.or_else(|| extract_url_from_text(&req.text));
+    let tags = req.tags.unwrap_or_default();
 
     let entry = insert_entry(
         &state.db,
@@ -686,8 +757,9 @@ async fn quick_capture(
             notes: req.text,
             url,
             source: req.source.unwrap_or_else(|| "quick-capture".to_string()),
-            tags_json: serialize_tags(req.tags.unwrap_or_default())?,
+            tags_json: serialize_tags(tags.clone())?,
         },
+        &tags,
     )
     .await?;
 
@@ -734,6 +806,7 @@ async fn telegram_capture(
             source,
             tags_json: serialize_tags(Vec::new())?,
         },
+        &[],
     )
     .await?;
 
@@ -746,59 +819,465 @@ async fn telegram_capture(
     ))
 }
 
-async fn insert_entry(db: &Database, data: NewEntry) -> Result<Entry, ApiError> {
-    let row = match db {
+// -- Category handlers --
+
+async fn list_categories(State(state): State<AppState>) -> Result<Json<Vec<Category>>, ApiError> {
+    let rows = match &state.db {
         Database::Postgres(pool) => {
-            sqlx::query_as::<_, EntryRow>(
-                r#"
-                INSERT INTO entries (id, title, kind, status, notes, url, source, tags_json)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING
-                  id,
-                  title,
-                  kind,
-                  status,
-                  notes,
-                  url,
-                  source,
-                  tags_json,
-                  created_at::text AS created_at,
-                  updated_at::text AS updated_at
-                "#,
+            sqlx::query_as::<_, CategoryRow>(
+                "SELECT id, name, description, \
+                 created_at::text AS created_at \
+                 FROM categories ORDER BY name",
             )
-            .bind(data.id)
-            .bind(data.title)
-            .bind(data.kind)
-            .bind(data.status)
-            .bind(data.notes)
-            .bind(data.url)
-            .bind(data.source)
-            .bind(data.tags_json)
+            .fetch_all(pool)
+            .await?
+        }
+        Database::Sqlite(pool) => {
+            sqlx::query_as::<_, CategoryRow>(
+                "SELECT id, name, description, created_at \
+                 FROM categories ORDER BY name",
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    Ok(Json(
+        rows.into_iter().map(CategoryRow::into_category).collect(),
+    ))
+}
+
+async fn create_category(
+    State(state): State<AppState>,
+    Json(req): Json<CreateCategoryRequest>,
+) -> Result<(StatusCode, Json<Category>), ApiError> {
+    let name = req.name.trim().to_lowercase();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest(
+            "category name cannot be empty".to_string(),
+        ));
+    }
+
+    let id = Uuid::new_v4().to_string();
+    let description = req.description.unwrap_or_default();
+
+    let row = match &state.db {
+        Database::Postgres(pool) => sqlx::query_as::<_, CategoryRow>(
+            "INSERT INTO categories (id, name, description) \
+             VALUES ($1, $2, $3) \
+             RETURNING id, name, description, \
+             created_at::text AS created_at",
+        )
+        .bind(&id)
+        .bind(&name)
+        .bind(&description)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| map_unique_error(e, &name, "category"))?,
+        Database::Sqlite(pool) => sqlx::query_as::<_, CategoryRow>(
+            "INSERT INTO categories (id, name, description) \
+             VALUES (?1, ?2, ?3) \
+             RETURNING id, name, description, created_at",
+        )
+        .bind(&id)
+        .bind(&name)
+        .bind(&description)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| map_unique_error(e, &name, "category"))?,
+    };
+
+    Ok((StatusCode::CREATED, Json(row.into_category())))
+}
+
+async fn update_category(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateCategoryRequest>,
+) -> Result<Json<Category>, ApiError> {
+    let name = req
+        .name
+        .map(|n| {
+            let trimmed = n.trim().to_lowercase();
+            if trimmed.is_empty() {
+                Err(ApiError::BadRequest(
+                    "category name cannot be empty".to_string(),
+                ))
+            } else {
+                Ok(trimmed)
+            }
+        })
+        .transpose()?;
+
+    let row = match &state.db {
+        Database::Postgres(pool) => {
+            sqlx::query_as::<_, CategoryRow>(
+                "UPDATE categories \
+             SET name = COALESCE($2, name), \
+                 description = COALESCE($3, description) \
+             WHERE id = $1 \
+             RETURNING id, name, description, \
+             created_at::text AS created_at",
+            )
+            .bind(&id)
+            .bind(&name)
+            .bind(&req.description)
+            .fetch_optional(pool)
+            .await?
+        }
+        Database::Sqlite(pool) => {
+            sqlx::query_as::<_, CategoryRow>(
+                "UPDATE categories \
+             SET name = COALESCE(?2, name), \
+                 description = COALESCE(?3, description) \
+             WHERE id = ?1 \
+             RETURNING id, name, description, created_at",
+            )
+            .bind(&id)
+            .bind(&name)
+            .bind(&req.description)
+            .fetch_optional(pool)
+            .await?
+        }
+    }
+    .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(row.into_category()))
+}
+
+async fn delete_category(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let in_use = match &state.db {
+        Database::Postgres(pool) => {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(\
+               SELECT 1 FROM entries e \
+               JOIN categories c ON c.name = e.kind \
+               WHERE c.id = $1\
+             )",
+            )
+            .bind(&id)
             .fetch_one(pool)
             .await?
         }
         Database::Sqlite(pool) => {
-            sqlx::query_as::<_, EntryRow>(
-                r#"
-                INSERT INTO entries (id, title, kind, status, notes, url, source, tags_json)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                RETURNING id, title, kind, status, notes, url, source, tags_json, created_at, updated_at
-                "#,
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(\
+               SELECT 1 FROM entries e \
+               JOIN categories c ON c.name = e.kind \
+               WHERE c.id = ?1\
+             )",
             )
-            .bind(data.id)
-            .bind(data.title)
-            .bind(data.kind)
-            .bind(data.status)
-            .bind(data.notes)
-            .bind(data.url)
-            .bind(data.source)
-            .bind(data.tags_json)
+            .bind(&id)
             .fetch_one(pool)
             .await?
         }
     };
 
+    if in_use {
+        return Err(ApiError::BadRequest(
+            "cannot delete category that is in use by entries".to_string(),
+        ));
+    }
+
+    let rows_affected = match &state.db {
+        Database::Postgres(pool) => sqlx::query("DELETE FROM categories WHERE id = $1")
+            .bind(&id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        Database::Sqlite(pool) => sqlx::query("DELETE FROM categories WHERE id = ?1")
+            .bind(&id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+    };
+
+    if rows_affected == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// -- Tag handlers --
+
+async fn list_tags(State(state): State<AppState>) -> Result<Json<Vec<Tag>>, ApiError> {
+    let rows = match &state.db {
+        Database::Postgres(pool) => {
+            sqlx::query_as::<_, TagRow>(
+                "SELECT id, name, created_at::text AS created_at \
+                 FROM tags ORDER BY name",
+            )
+            .fetch_all(pool)
+            .await?
+        }
+        Database::Sqlite(pool) => {
+            sqlx::query_as::<_, TagRow>(
+                "SELECT id, name, created_at \
+                 FROM tags ORDER BY name",
+            )
+            .fetch_all(pool)
+            .await?
+        }
+    };
+
+    Ok(Json(rows.into_iter().map(TagRow::into_tag).collect()))
+}
+
+async fn create_tag(
+    State(state): State<AppState>,
+    Json(req): Json<CreateTagRequest>,
+) -> Result<(StatusCode, Json<Tag>), ApiError> {
+    let name = req.name.trim().to_lowercase();
+    if name.is_empty() {
+        return Err(ApiError::BadRequest("tag name cannot be empty".to_string()));
+    }
+
+    let id = Uuid::new_v4().to_string();
+
+    let row = match &state.db {
+        Database::Postgres(pool) => sqlx::query_as::<_, TagRow>(
+            "INSERT INTO tags (id, name) VALUES ($1, $2) \
+             RETURNING id, name, created_at::text AS created_at",
+        )
+        .bind(&id)
+        .bind(&name)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| map_unique_error(e, &name, "tag"))?,
+        Database::Sqlite(pool) => sqlx::query_as::<_, TagRow>(
+            "INSERT INTO tags (id, name) VALUES (?1, ?2) \
+             RETURNING id, name, created_at",
+        )
+        .bind(&id)
+        .bind(&name)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| map_unique_error(e, &name, "tag"))?,
+    };
+
+    Ok((StatusCode::CREATED, Json(row.into_tag())))
+}
+
+async fn delete_tag(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let rows_affected = match &state.db {
+        Database::Postgres(pool) => sqlx::query("DELETE FROM tags WHERE id = $1")
+            .bind(&id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+        Database::Sqlite(pool) => sqlx::query("DELETE FROM tags WHERE id = ?1")
+            .bind(&id)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+    };
+
+    if rows_affected == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// -- Helpers --
+
+async fn insert_entry(db: &Database, data: NewEntry, tags: &[String]) -> Result<Entry, ApiError> {
+    match db {
+        Database::Postgres(pool) => {
+            sqlx::query(
+                "INSERT INTO entries \
+                 (id, title, kind, status, notes, url, source, tags_json) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            )
+            .bind(&data.id)
+            .bind(&data.title)
+            .bind(&data.kind)
+            .bind(&data.status)
+            .bind(&data.notes)
+            .bind(&data.url)
+            .bind(&data.source)
+            .bind(&data.tags_json)
+            .execute(pool)
+            .await?;
+        }
+        Database::Sqlite(pool) => {
+            sqlx::query(
+                "INSERT INTO entries \
+                 (id, title, kind, status, notes, url, source, tags_json) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )
+            .bind(&data.id)
+            .bind(&data.title)
+            .bind(&data.kind)
+            .bind(&data.status)
+            .bind(&data.notes)
+            .bind(&data.url)
+            .bind(&data.source)
+            .bind(&data.tags_json)
+            .execute(pool)
+            .await?;
+        }
+    }
+
+    if !tags.is_empty() {
+        sync_entry_tags(db, &data.id, tags).await?;
+    }
+
+    fetch_entry(db, &data.id).await
+}
+
+async fn fetch_entry(db: &Database, id: &str) -> Result<Entry, ApiError> {
+    let row = match db {
+        Database::Postgres(pool) => {
+            sqlx::query_as::<_, EntryRow>(
+                r#"
+                SELECT
+                  e.id,
+                  e.title,
+                  e.kind,
+                  e.status,
+                  e.notes,
+                  e.url,
+                  e.source,
+                  COALESCE(
+                    (SELECT json_agg(sub.name)::text
+                     FROM (SELECT t.name
+                           FROM entry_tags et
+                           JOIN tags t ON t.id = et.tag_id
+                           WHERE et.entry_id = e.id
+                           ORDER BY t.name) sub),
+                    '[]'
+                  ) AS tags_json,
+                  e.created_at::text AS created_at,
+                  e.updated_at::text AS updated_at
+                FROM entries e
+                WHERE e.id = $1
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+        }
+        Database::Sqlite(pool) => {
+            sqlx::query_as::<_, EntryRow>(
+                r#"
+                SELECT
+                  e.id,
+                  e.title,
+                  e.kind,
+                  e.status,
+                  e.notes,
+                  e.url,
+                  e.source,
+                  COALESCE(
+                    (SELECT json_group_array(sub.name)
+                     FROM (SELECT t.name
+                           FROM entry_tags et
+                           JOIN tags t ON t.id = et.tag_id
+                           WHERE et.entry_id = e.id
+                           ORDER BY t.name) sub),
+                    '[]'
+                  ) AS tags_json,
+                  e.created_at,
+                  e.updated_at
+                FROM entries e
+                WHERE e.id = ?1
+                "#,
+            )
+            .bind(id)
+            .fetch_optional(pool)
+            .await?
+        }
+    }
+    .ok_or(ApiError::NotFound)?;
+
     row.into_entry()
+}
+
+async fn sync_entry_tags(db: &Database, entry_id: &str, tags: &[String]) -> Result<(), ApiError> {
+    let lowered: Vec<String> = tags.iter().map(|t| t.trim().to_lowercase()).collect();
+
+    match db {
+        Database::Postgres(pool) => {
+            for tag_name in &lowered {
+                sqlx::query(
+                    "INSERT INTO tags (id, name) VALUES ($1, $2) \
+                     ON CONFLICT (name) DO NOTHING",
+                )
+                .bind(Uuid::new_v4().to_string())
+                .bind(tag_name)
+                .execute(pool)
+                .await?;
+            }
+
+            sqlx::query("DELETE FROM entry_tags WHERE entry_id = $1")
+                .bind(entry_id)
+                .execute(pool)
+                .await?;
+
+            for tag_name in &lowered {
+                sqlx::query(
+                    "INSERT INTO entry_tags (entry_id, tag_id) \
+                     SELECT $1, id FROM tags WHERE name = $2",
+                )
+                .bind(entry_id)
+                .bind(tag_name)
+                .execute(pool)
+                .await?;
+            }
+
+            let tags_json = serialize_tags(lowered.clone())?;
+            sqlx::query("UPDATE entries SET tags_json = $1 WHERE id = $2")
+                .bind(&tags_json)
+                .bind(entry_id)
+                .execute(pool)
+                .await?;
+        }
+        Database::Sqlite(pool) => {
+            for tag_name in &lowered {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO tags (id, name) \
+                     VALUES (?1, ?2)",
+                )
+                .bind(Uuid::new_v4().to_string())
+                .bind(tag_name)
+                .execute(pool)
+                .await?;
+            }
+
+            sqlx::query("DELETE FROM entry_tags WHERE entry_id = ?1")
+                .bind(entry_id)
+                .execute(pool)
+                .await?;
+
+            for tag_name in &lowered {
+                sqlx::query(
+                    "INSERT INTO entry_tags (entry_id, tag_id) \
+                     SELECT ?1, id FROM tags WHERE name = ?2",
+                )
+                .bind(entry_id)
+                .bind(tag_name)
+                .execute(pool)
+                .await?;
+            }
+
+            let tags_json = serialize_tags(lowered.clone())?;
+            sqlx::query("UPDATE entries SET tags_json = ?1 WHERE id = ?2")
+                .bind(&tags_json)
+                .bind(entry_id)
+                .execute(pool)
+                .await?;
+        }
+    }
+
+    Ok(())
 }
 
 fn serialize_tags(tags: Vec<String>) -> Result<String, ApiError> {
@@ -825,15 +1304,29 @@ fn extract_url_from_text(text: &str) -> Option<String> {
         })
 }
 
-fn validate_kind(kind: &str) -> Result<(), ApiError> {
-    if ALLOWED_KINDS.contains(&kind) {
-        return Ok(());
+async fn validate_kind(db: &Database, kind: &str) -> Result<(), ApiError> {
+    let exists = match db {
+        Database::Postgres(pool) => {
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM categories WHERE name = $1)")
+                .bind(kind)
+                .fetch_one(pool)
+                .await?
+        }
+        Database::Sqlite(pool) => {
+            sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM categories WHERE name = ?1)")
+                .bind(kind)
+                .fetch_one(pool)
+                .await?
+        }
+    };
+
+    if !exists {
+        return Err(ApiError::BadRequest(format!(
+            "invalid kind `{kind}`, not found in categories"
+        )));
     }
 
-    Err(ApiError::BadRequest(format!(
-        "invalid kind `{kind}`, allowed: {}",
-        ALLOWED_KINDS.join(", ")
-    )))
+    Ok(())
 }
 
 fn validate_status(status: &str) -> Result<(), ApiError> {
@@ -845,6 +1338,16 @@ fn validate_status(status: &str) -> Result<(), ApiError> {
         "invalid status `{status}`, allowed: {}",
         ALLOWED_STATUSES.join(", ")
     )))
+}
+
+fn map_unique_error(e: sqlx::Error, name: &str, entity: &str) -> ApiError {
+    if let sqlx::Error::Database(ref db_err) = e {
+        let msg = db_err.message().to_lowercase();
+        if msg.contains("unique") || msg.contains("duplicate") {
+            return ApiError::BadRequest(format!("{entity} `{name}` already exists"));
+        }
+    }
+    ApiError::Database(e)
 }
 
 #[cfg(test)]

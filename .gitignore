@@ -1,2 +1,20 @@
 /target/
 .DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Agent state
+.agents/*.log
+
+# Data
+data/
