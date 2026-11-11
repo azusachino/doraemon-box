@@ -1,7 +1,6 @@
 [tools]
-rust = "stable"
-"npm:prettier" = "latest"
-"npm:markdownlint-cli2" = "latest"
+"npm:prettier" = "3.9"
+"npm:markdownlint-cli2" = "0.24"
 
 [tasks.fmt]
 description = "Format all files"
