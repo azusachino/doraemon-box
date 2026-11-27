@@ -9,8 +9,9 @@ thiserror = "1"
 
 # database
 # sqlite3 = "0.24"
-sqlx = { version = "0.7", features = [
-    "runtime-tokio-rustls",
+sqlx = { version = "0.9", features = [
+    "runtime-tokio",
+    "tls-rustls",
     "postgres",
     "sqlite",
     "migrate",
